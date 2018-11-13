@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+
+    <title>ilang viewport</title>
+    
+    <style media="screen" type="text/css">
+body {
+    margin:     0;
+    color:      #333;
+    font-family: Helvetica, Arial, FreeSans, san-serif;
+    background-color: #121621;/*#0e182e;*/
+}
+.openseadragon
+{
+    width:      800px;
+    height:     500px;
+    border:     1px solid black;
+    color:      #333; /* text color for messages */
+    background-color: black;
+    cursor:pointer;
+    position:relative;
+    margin:auto;
+    cursor:pointer;
+ 
+}
+    </style>
+    
+    <script src="./openseadragon.min.js"></script>
+</head>
+
+<body>
+    <div id="page_contentDiv" class="openseadragon"></div>
+
+<script type="text/javascript">
+viewer = OpenSeadragon({
+     id:              "page_contentDiv", 
+     prefixUrl:       "./openseadragon/images/", 
+     showReferenceStrip: false, 
+     timeout: 30000, 
+     immediateRender: false, 
+     alwaysBlend: false, 
+     tileSources: [{"levels": [{"url": "./ilang_viewport.png", "width": 2000, "height": 2000}], "type": "legacy-image-pyramid"}, ],     
+     });
+</script>
+
+</body>
+</html>
+

@@ -1,0 +1,14 @@
+MANIFEST.in
+README.rst
+setup.py
+Occiput_Interface_Biograph_mMR/Biograph_mMR.py
+Occiput_Interface_Biograph_mMR/Biograph_mMR_Listmode.py
+Occiput_Interface_Biograph_mMR/Biograph_mMR_Physiology.py
+Occiput_Interface_Biograph_mMR/__init__.py
+Occiput_Interface_Biograph_mMR/listmode_c.c
+Occiput_Interface_Biograph_mMR/physiological_c.c
+Occiput_Interface_Biograph_mMR.egg-info/PKG-INFO
+Occiput_Interface_Biograph_mMR.egg-info/SOURCES.txt
+Occiput_Interface_Biograph_mMR.egg-info/dependency_links.txt
+Occiput_Interface_Biograph_mMR.egg-info/requires.txt
+Occiput_Interface_Biograph_mMR.egg-info/top_level.txt

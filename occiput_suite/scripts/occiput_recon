@@ -1,0 +1,375 @@
+#! /usr/pubsw/packages/occiput/dependencies/python/bin/occiput/bin/python2.7
+
+# Reconstruction of brain FDG PET acquired on Siemens Biograph mMR
+# Load listmode data of a brain FDG scan acquired on Siemens Biograph mMR and reconstruct using OSEM. Compare the reconstruction with the reconstruction obtained with the Siemens E7 Tools using the same parameters of the OSEM algorithm.
+
+from __future__ import absolute_import, print_function
+import getopt
+import os
+from glob import glob
+import argparse
+from pathlib import Path
+
+from .. import occiput
+from Occiput_Interface_Biograph_mMR import Biograph_mMR
+from ..interfile import Interfile
+from numpy import *
+from ..occiput.DataSources.FileSources.Files import guess_file_type_by_name
+from ..occiput.DataSources.FileSources.PET_projection import import_PET_Projection
+from ..occiput.DataSources.FileSources.PET_projection import import_interfile_projection
+from ..occiput.Reconstruction.PET import PET_Static_Scan
+from ..occiput.Reconstruction.PET.PET_subsets import SubsetGenerator
+
+
+def osem_reconstruction(pet, iterations=10, activity=None, attenuation_projection=None, subset_mode="random",
+                        subset_size=64, transformation=None, SaveAll=False, KineticPrior=False, SaveDisk=False,
+                        savepath=""):
+    if activity is None:
+        activity = pet._make_Image3D_activity(
+            ones(pet.activity_shape, dtype=float32, order="F"))
+
+    subsets_generator = SubsetGenerator(
+            pet.binning.N_azimuthal, pet.binning.N_axial)
+
+    if pet.sensitivity is None:
+        sensitivity = pet.prompts.copy()
+        sensitivity.data = 0.0 * sensitivity.data + 1
+        pet.set_sensitivity(sensitivity)
+
+    if SaveAll:
+        activity_all = ones(
+            (pet.activity_shape[0], pet.activity_shape[1], pet.activity_shape[2], iterations), dtype=float32)
+
+    for i in range(iterations):
+        print(str(i + 1) + "/" + str(iterations))
+        subsets_matrix = subsets_generator.new_subset(subset_mode, subset_size)
+        # TODO : introduce OSL prior into osem_step
+        activity = pet.osem_step(
+            activity, subsets_matrix, attenuation_projection, transformation)
+        if SaveAll:
+            temp = activity.data
+            temp = np.flip(temp, 0)  # U-D
+            temp = np.flip(temp, 1)  # L-R
+            # temp = np.flip(temp,2)  #Zreverse
+            activity_all[:, :, :, i] = temp
+            del temp
+        if SaveDisk:
+            activity.save_to_file(savepath + 'activity_recon_%d.nii' % i)
+        if KineticPrior:
+            # call kinetic model fitter module
+            # update activity before next iteration
+            pass
+    activity.save_to_file(savepath + 'PET_RECON_OCCIPUT.nii')
+    if SaveAll:
+        return activity, activity_all
+    else:
+        return activity
+
+
+############################################################################
+
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def helptext():
+    print("================================================================================================")
+    print("HELP:")
+    print("................................................................................................")
+    print("occiput_recon -i <inputpath>                 | PATH TO OCCIPUT-READY RAW DATA")
+    print("              -o <outputpath>                | PATH FOR RECONSTRUCTED IMAGE (can create folder)")
+    print("              -ts <startTime [min]>          | (TODO) RECON OPTS: time frame starting point")
+    print("              -te <endTime [min]>            | (TODO) RECON OPTS: time frame ending point")
+    print("              -s <subsetsNum>                | RECON OPTS: number of OSEM subsets")
+    print("              -r <iterNum>                   | RECON OPTS: number of iteration (Siemens-like)")
+    print("              --Nx <Nx>                      | RECON IMAGE SIZE: #pixel 1st axis")
+    print("              --Ny <Ny>                      | RECON IMAGE SIZE: #pixel 2nd axis")
+    print("              --Nz <Nz>                      | RECON IMAGE SIZE: #pixel 3rd axis")
+    print("              --Rx <Rx>                      | RECON IMAGE SIZE: pixel size (res) 1st axis")
+    print("              --Ry <Ry>                      | RECON IMAGE SIZE: pixel size (res) 2nd axis")
+    print("              --Rz <Rz>                      | RECON IMAGE SIZE: pixel size (res) 3rd axis")
+    print("              --saveDisk <[bool]saveOnDisk>  | BOOL PARAM: save each OSEM iteration as *.nii?")
+    print("              --idGPU <selectGPU>            | SELECT GPU: choose on which GPU run the recon")
+    print("................................................................................................")
+    print("EXAMPLE:")
+    print("................................................................................................")
+    print("occiput_recon \\")
+    print("-i '/space/mercury/2/users/occiput/data/PET_data/Kinetic/FDG_mMR/s126/' \\ ")
+    print("-o '/space/mercury/2/users/occiput/data/PET_data/Kinetic/FDG_mMR/s126/out_test_cmd_line/' \\")
+    print("-s 10 \\ ")
+    print("-r 1 \\ ")
+    print("--Nx 150 \\ ")
+    print("--Ny 150 \\ ")
+    print("--Nz 127 \\ ")
+    print("--idGPU 0 \\")
+    print("--saveDisk 1")
+    print("================================================================================================")
+
+
+# TODO: we still have problems with scaling randoms. Untill they are solved we are using the default pet.import_randoms fanction
+# instead of this. This was created for testing purposes
+
+
+def import_randoms(pet, filename, datafile='', duration_ms=None):
+    filetype = guess_file_type_by_name(filename)
+    if filetype is "interfile_projection_header":
+        projection = import_interfile_projection(
+            filename, pet.binning, pet.scanner.michelogram, datafile)
+    elif filetype is "h5":
+        projection = import_PET_Projection(filename)
+    else:
+        print("PET.import_randoms: file type unknown. ")
+        return
+    projection.data = float32(projection.data)
+    if duration_ms is not None:
+        print("duration_ms = " + str(duration_ms))
+        print("scale factor = " + str(pet.prompts.get_duration() / (1.0 * duration_ms)))
+        projection.data = projection.data * pet.prompts.get_duration() / \
+                          (1.0 * duration_ms)
+    if pet._use_compression is False:
+        projection = projection.uncompress_self()
+    pet.set_randoms(projection)
+
+
+def main(argv):
+    # check input options
+    datapath = os.getcwd()
+    out_dir = datapath + 'occiput_out/'
+    subs_num = 21
+    iter_num = 3
+    SaveAll = False
+    SaveDisk = False
+    Nx = 344
+    Ny = 344
+    Nz = 127
+    ts = 0
+    te = None
+    Rx = 2.08626006
+    Ry = 2.08626006
+    Rz = 2.03125
+    idGPU = 0
+    # TODO : SET START AND END TIME OF THE RECONSTRUCTION WINDOW AND SCALE ACCORDINGLY RANDOMS AND SCATTER ESTIMATES
+    try:
+        opts, args = getopt.getopt(argv, "hi:o:s:r:", [
+            "ifile=", "ofile=", "ts=", "te=", "subset=", "iter=", "Nx=", "Ny=", "Nz=", "Rx=", "Ry=", "Rz=", "saveDisk=",
+            "idGPU="])
+        if len(opts) == 0:
+            helptext()
+            sys.exit()
+    except getopt.GetoptError:
+        print("................................................................................................")
+        print("occiput_recon -i <inputpath> -o <outputpath> -ts <startTime [min]> -te <endTime [min]> \\")
+        print("              -s <subsetsNum> -r <iterNum> --Nx <Nx> --Ny <Ny> --Nz <Nz> \\")
+        print("              --Rx <Rx> --Ry <Ry> --Rz <Rz> --saveDisk <[bool]saveOnDisk> --idGPU <selectGPU>")
+        print("................................................................................................")
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == "-h":
+            helptext()
+            sys.exit()
+        elif opt in ("-i", "--ifile"):
+            datapath = arg
+        elif opt in ("-o", "--ofile"):
+            out_dir = arg
+        elif opt in ("-s", "--subset"):
+            subs_num = int32(arg)
+        elif opt in ("--ts"):
+            ts = int32(arg)
+            # pass
+        elif opt in ("--te"):
+            te = int32(arg)
+            # pass
+        elif opt in ("-r", "--iter"):
+            iter_num = int32(arg)
+        elif opt in ("--Nx"):
+            Nx = int32(arg)
+        elif opt in ("--Ny"):
+            Ny = int32(arg)
+        elif opt in ("--Nz"):
+            Nz = int32(arg)
+        elif opt in ("--Rx"):
+            Rx = float32(arg)
+        elif opt in ("--Ry"):
+            Ry = float32(arg)
+        elif opt in ("--Rz"):
+            Rz = float32(arg)
+        # elif opt in ("--saveAll"):
+        #	SaveAll = str2bool(arg)
+        elif opt in ("--saveDisk"):
+            SaveDisk = str2bool(arg)
+        elif opt in ("--idGPU"):
+            idGPU = int32(arg)
+
+    print("\n\n\n==========================================================")
+    print("Input: " + datapath)
+    print("Output: " + out_dir)
+    # print("Save All Iteration on Workspace? " + str(SaveAll) + " " + str(type(SaveAll)))
+    print("Save All Iteration on Disk? " + str(SaveDisk) + " " + str(type(SaveDisk)))
+    print("\n------------------- RECONSTRUCTION ---------------------")
+    print("#Subsets: " + str(subs_num))
+    print("#TotIterations (#iter * #subs) : " + str(iter_num * subs_num))
+    print("Shape of reconstructed activity: " + str((Nx, Ny, Nz)))
+    print("Pixel size (mm): " + str((Rx, Ry, Rz)))
+    print("Size of FOV (mm): " + str((Nx * Rx, Ny * Ry, Nz * Rz)))
+    print("Working on GPU #" + str(idGPU))
+    print("=========================================================\n\n")
+
+    # Instantiate PET static scan object for PET reconstruction:
+    pet = PET_Static_Scan()
+    # Load interface to Siemens Biograph mMR scanner:
+    pet.set_scanner(Biograph_mMR)
+    # Enable/disable sinogram compression mode:
+    pet.use_compression(False)
+    # Set GPU
+    print("CHOOSE GPU:")
+    print(occiput.Core.NiftyPy_wrap.gpu_list())
+    occiput.Core.NiftyPy_wrap.gpu_set(gpu_id=idGPU)
+
+    # LOAD MEASUREMENT DATA - 90 MIN
+    listmode_file = glob(datapath + 'PET*.l.hdr')[0]
+    sensitivity_file = glob(datapath + 'n*.h33')[0]
+    smooth_random_file = glob(datapath + 's*.h33')[0]
+    scatter_file = glob(datapath + 'scat*.s.hdr')[0]
+    human_attenuation_file = glob(datapath + '*umap.v.hdr')[0]
+    hw_attenuation_file = glob(datapath + '*umap-hardware.v.hdr')[0]
+
+    # Display total scan duration:
+    header = Interfile.load(listmode_file)
+    scan_duration = header['image duration']['value'] / 60
+    if te is None:
+        te = scan_duration
+    time_range_ms = [ts * 60 * 1000, te * 60 * 1000]
+    rec_length = time_range_ms[1] - time_range_ms[0]
+    print("\n\n================================================== ")
+    print("The acquisition is", scan_duration, "minutes")
+    print("The reconstructed time frame lasts", rec_length / 60 / 1000, "minutes")
+    print("==================================================")
+
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    # Load measurement data:
+    prompts_file = Path(out_dir + 'prompts[%d-%d]min.h5' % (ts, te))
+    random_file = Path(out_dir + 'randoms[%d-%d]min.h5' % (ts, te))
+    print("\n\nLoading prompts and randoms ...")
+    if (prompts_file.is_file()) and (random_file.is_file()):
+        pet.import_prompts(out_dir + 'prompts[%d-%d]min.h5' % (ts, te))
+        pet.import_randoms(out_dir + 'randoms[%d-%d]min.h5' % (ts, te))
+    else:
+        pet.import_listmode(listmode_file, time_range_ms=time_range_ms)
+        pet.export_prompts(out_dir + 'prompts[%d-%d]min.h5' % (ts, te))
+        pet.export_randoms(out_dir + 'randoms[%d-%d]min.h5' % (ts, te))
+    print("Done!")
+
+    # Load sensitivity:
+    print("\nLoading sensitivity ...")
+    pet.import_sensitivity(sensitivity_file)
+    print("Done!")
+
+    if ((rec_length / 60 / 1000) == scan_duration):
+        # Import smoothed randoms:
+        print("\nLoading smoothed randoms ...")
+        # import_randoms(pet,smooth_random_file,duration_ms=time_range_ms)
+        pet.import_randoms(smooth_random_file)
+        print("Done!")
+
+    # Import scatter estimate:
+    print("\nLoading scatter estimate ...")
+    pet.import_scatter(scatter_file, duration_ms=rec_length)
+    # pet.import_scatter(scatter_file)
+    print("Done!")
+
+    # Load attenuation:
+    print("\nLoading attenuation ...")
+    pet.import_attenuation(filename=human_attenuation_file,
+                           filename_hardware=hw_attenuation_file)
+    print("Done!")
+
+    # Project the attenuation map for the purpose of visualizing it:
+    print("\nProjecting attenuation map in sinogram space ...")
+    attenuation_projection = pet.project_attenuation(pet.attenuation)
+    print("Done!" + "\n\n")
+
+    # Visualize prompts, randoms, scatter, sensitivity and the projection of the attenuation
+    """
+	    figure(figsize=[14,6])
+	    subplot(1,3,1); imshow(
+	        flipud(pet.prompts.to_nd_array()[0,5,:,:].transpose()),cmap='hot')
+	    subplot(1,3,2); imshow(
+	        flipud(pet.randoms.to_nd_array()[0,5,:,:].transpose()),cmap='hot')
+	    subplot(1,3,3); imshow(
+	        flipud(pet.scatter.to_nd_array()[0,5,:,:].transpose()),cmap='hot')
+	    figure(figsize=[14,6])
+	    subplot(1,3,1); imshow(
+	        flipud(pet.sensitivity.to_nd_array()[0,5,:,:].transpose()),cmap='gray')
+	    subplot(1,3,2); imshow(flipud(
+	        pet.attenuation_projection.to_nd_array()[0,5,:,:].transpose()),cmap='gray')
+	    subplot(1,3,3); pet.quick_inspect()
+	"""
+
+    # ITERATIVE RECONSTRUCTION ============================================================================================
+
+    # Set parameters for OSEM reconstruction:
+    # Standard 3 iterations of fully 3D OSEM with 21 subsets
+    subset_size = pet.binning.N_axial / subs_num
+    iterations = (pet.binning.N_axial / subset_size) * iter_num
+    subset_mode = "ordered_axial"
+
+    # Occiput allows you to optionally set freely the position of the reconstruction volume;
+    # TODO : give option to set flag to True
+    experiment_with_transforms = False
+    from ..occiput.Reconstruction.PET.PET import RigidTransform
+    if experiment_with_transforms:
+        r = RigidTransform([0, 0, 0, 0, 0, pi / 4])
+    else:
+        r = RigidTransform([0, 0, 0, 0, 0, 0])
+
+    pet.set_activity_shape([Nx, Ny, Nz])
+    pet.set_activity_size([pet.activity_shape[0] * Rx,
+                           pet.activity_shape[1] * Ry, pet.activity_shape[2] * Rz])
+
+    print("================================================== ")
+    print("RECONSTRUCTION DETAILS:")
+    print("Size (mm): " + str(pet.activity_size))
+    print("Shape (px): " + str(pet.activity_shape))
+    print("Resolution (mm/px): " + str(np.asarray(pet.activity_size) / np.asarray(pet.activity_shape)))
+    print("==================================================\n\n")
+
+    print("OSEM RECONSTRUCTION:")
+    activity_recon = osem_reconstruction(pet, iterations=iterations, subset_mode=subset_mode,
+                                         attenuation_projection=attenuation_projection,
+                                         subset_size=subset_size, transformation=r, SaveAll=SaveAll,
+                                         SaveDisk=SaveDisk, savepath=out_dir)
+    print("Done!")
+
+    """
+	# DISPLAY LAST ITERATION RESULT
+	temp = activity_recon.data
+	temp = np.flip(temp,0)  #U-D
+	temp = np.flip(temp,1)  #L-R
+
+	figure(figsize=[20,20])
+	subplot(131); imshow(temp[:,80,:].T,vmax = 14.0, cmap='hot')
+	subplot(132); imshow(temp[80,:,:].T,vmax = 14.0, cmap='hot'),title("OCCIPUT")
+	subplot(133); imshow(temp[:,:,70],vmax = 14.0, cmap='hot')
+
+	activity_Siemens = import_interfile_volume(datapath+'recon_000_000.v.hdr')
+	figure(figsize=[20,20])
+	subplot(131); imshow(np.fliplr(
+	    activity_Siemens.data[:,activity_Siemens.shape[0]/2-5,:].transpose()),vmax = 5.0, cmap='hot')
+	subplot(132); imshow(np.fliplr(
+	    activity_Siemens.data[activity_Siemens.shape[1]/2,:,:].transpose()),vmax = 5.0, cmap='hot'),title("SIEMENS")
+	subplot(133); imshow(np.fliplr(np.flipud(
+	    activity_Siemens.data[:,:,activity_Siemens.shape[2]/2])),vmax = 5.0, cmap='hot')
+	"""
+
+
+if __name__ == "__main__":
+    # main('/local_mount/space/mercury/2/users/occiput/data/PET_data/Kinetic/FDG_mMR/s126/', '/local_mount/space/mercury/2/users/occiput/data/PET_data/Kinetic/FDG_mMR/s126/out_test/', subs_num=21, iter_num=1, SaveAll = False, SaveDisk=True)
+    main(sys.argv[1:])

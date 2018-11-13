@@ -1,0 +1,402 @@
+#! /usr/pubsw/packages/occiput/dependencies/python/bin/occiput/bin/python2.7
+
+# Simulator of Siemens Biograph mMR PET-MR scanner
+# This script allows you to simulate PET acquisition and reconstruction using the Siemens Biograph mMR geometry and an imported phantom
+
+import copy
+# SIMULATION
+import getopt
+import os
+import argparse
+
+import nibabel as nib
+from .. import occiput
+from Occiput_Interface_Biograph_mMR import Biograph_mMR
+from numpy import *
+from ..occiput.DataSources.FileSources.Volume import import_nifti
+from ..occiput.DataSources.FileSources.PET_projection import import_PET_Projection
+from ..occiput.Reconstruction.PET import PET_Static_Scan
+from ..occiput.Reconstruction.PET.PET_subsets import SubsetGenerator
+
+
+def osem_reconstruction(pet, iterations=10, activity=None, attenuation_projection=None, subset_mode="random",
+                        subset_size=64, transformation=None, SaveAll=False, KineticPrior=False, SaveDisk=False,
+                        savepath=""):
+    if activity is None:
+        activity = pet._make_Image3D_activity(
+            ones(pet.activity_shape, dtype=float32, order="F"))
+
+    subsets_generator = SubsetGenerator(
+            pet.binning.N_azimuthal, pet.binning.N_axial)
+
+    if pet.sensitivity is None:
+        sensitivity = pet.prompts.copy()
+        sensitivity.data = 0.0 * sensitivity.data + 1
+        pet.set_sensitivity(sensitivity)
+
+    if SaveAll:
+        activity_all = ones(
+            (pet.activity_shape[0], pet.activity_shape[1], pet.activity_shape[2], iterations), dtype=float32)
+
+    for i in range(iterations):
+        print(str(i + 1) + "/" + str(iterations))
+        subsets_matrix = subsets_generator.new_subset(subset_mode, subset_size)
+        # TODO : introduce OSL prior into osem_step
+        activity = pet.osem_step(
+            activity, subsets_matrix, attenuation_projection, transformation)
+        if SaveAll:
+            temp = activity.data
+            temp = np.flip(temp, 0)  # U-D
+            temp = np.flip(temp, 1)  # L-R
+            # temp = np.flip(temp,2)  #Zreverse
+            activity_all[:, :, :, i] = temp
+            del temp
+        if SaveDisk:
+            activity.save_to_file(savepath + 'activity_recon_%d.nii' % i)
+        if KineticPrior:
+            # call kinetic model fitter module
+            # update activity before next iteration
+            pass
+    activity.save_to_file(savepath + 'PET_RECON_OCCIPUT.nii')
+    if SaveAll:
+        return activity, activity_all
+    else:
+        return activity
+
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def helptext():
+    print("============================================================================================================")
+    print("HELP:")
+    print("............................................................................................................")
+    print("occiput_simul3D -i <inputpath>                           | PATH TO OCCIPUT-READY RAW DATA")
+    print("                -o <outputpath>                          | PATH FOR RECONSTRUCTED IMAGE (can create folder)")
+    print("                -t <AcquisitionTime>                     | SIMUL OPTS: acquisition length (min)")
+    print("                -c <CountsPerSecond>                     | SIMUL OPTS: counts ate (counts per second)")
+    print("                --scaleScatter <scaleFactor>             | SIMUL OPTS: scale scatter intensity (int32)")
+    print("                --addPoisson <[bool]addPoisson>          | SIMUL OPTS: add Poisson noise to prompts")
+    print("                --addRandom <[bool]addRandom>            | SIMUL OPTS: load a simulation of randoms")
+    print("                --addScatter <[bool]addScatter>          | SIMUL OPTS: load a simulation of scatter")
+    print("                --addSensitivity <[bool]addSensitivity>  | SIMUL OPTS: load a simulation of sensistivity")
+    print("                --addAttenuation <[bool]addAttenuation>  | SIMUL OPTS: load a simulation of attenuation")
+    print("                -s <subsetsNum>                          | RECON OPTS: number of OSEM subsets")
+    print("                -r <iterNum>                             | RECON OPTS: number of iteration (Siemens-like)")
+    print("                --Nx <Nx>                                | RECON IMAGE SIZE: #pixel 1st axis")
+    print("                --Ny <Ny>                                | RECON IMAGE SIZE: #pixel 2nd axis")
+    print("                --Nz <Nz>                                | RECON IMAGE SIZE: #pixel 3rd axis")
+    print("                --Rx <Rx>                                | RECON IMAGE SIZE: pixel size (res) 1st axis")
+    print("                --Ry <Ry>                                | RECON IMAGE SIZE: pixel size (res) 2nd axis")
+    print("                --Rz <Rz>                                | RECON IMAGE SIZE: pixel size (res) 3rd axis")
+    print("                --saveDisk <[bool]saveOnDisk>            | BOOL PARAM: save each OSEM iteration as *.nii?")
+    print("                --idGPU <selectGPU>                      | SELECT GPU: choose on which GPU run the recon")
+    print("...........................................................................................................")
+    print("EXAMPLE:")
+    print("...........................................................................................................")
+    print("occiput_simul3D \\")
+    print("-i '/space/mercury/2/users/occiput/Douglas/simulation/01/' \\ ")
+    print("-o '/space/mercury/2/users/occiput/Douglas/simulation/01/out_test_cmd_line/' \\")
+    print("-t 20 \\")
+    print("-c 5e5 \\")
+    print("--scaleScatter 10 \\")
+    print("--addPoisson 1 \\")
+    print("--addRandom 1 \\")
+    print("--addScatter 1 \\")
+    print("--addSensitivity 1 \\")
+    print("--addAttenuation 1 \\")
+    print("-s 21 \\ ")
+    print("-r 5 \\ ")
+    print("--Nx 150 \\ ")
+    print("--Ny 150 \\ ")
+    print("--Nz 127 \\ ")
+    print("--Rx 2.08 \\ ")
+    print("--Ry 2.08 \\ ")
+    print("--Rz 2.03 \\ ")
+    print("--idGPU 0 \\")
+    print("--saveDisk 1")
+    print("==========================================================================================================")
+
+
+##############################################################################################################
+
+
+def main(argv):
+    sim_path = os.getcwd()  # '../../Douglas/simulation/01/'
+    acquisition_time_min = 20
+    counts_per_sec = 5e5
+    scaleScatter = 10
+    out_dir = sim_path + 'occiput_out/'
+    subs_num = 21
+    iter_num = 3
+    addPoisson = False
+    addAttenuation = False
+    addScatter = False
+    addRandom = False
+    addSensitivity = False
+    SaveAll = False
+    SaveDisk = False
+    Nx = 344
+    Ny = 344
+    Nz = 127
+    Rx = 2.08626006
+    Ry = 2.08626006
+    Rz = 2.03125
+    idGPU = 0
+    try:
+        opts, args = getopt.getopt(argv, "hi:o:s:r:t:c:",
+                                   ["ifile=", "ofile=", "acqTime=", "cps=", "scaleScatter=", "addPoisson=",
+                                    "addRandom=",
+                                    "addScatter=", "addSensitivity=", "addAttenuation=", "subset=", "iter=", "Nx=",
+                                    "Ny=", "Nz=", "Rx=", "Ry=", "Rz=", "saveDisk=", "idGPU="])
+        if len(opts) == 0:
+            helptext()
+            sys.exit()
+    except getopt.GetoptError:
+        print("................................................................................................................")
+        print("occiput_simul3D -i <inputpath>     -o <outputpath>   -t <AcquisitionTime>    -c <CountsPerSecond>  \\")
+        print("                --scaleScatter <scaleFactor>   --addRandom <[bool]addRandom> --addScatter <[bool]addScatter> \\")
+        print("                --addSensitivity <[bool]addSensitivity>  --addAttenuation <[bool]addAttenuation> \\")
+        print("                --addPoisson <[bool]addPoisson> -s <subsetsNum> -r <iterNum> --Nx <Nx> --Ny <Ny> --Nz <Nz> \\")
+        print("                --Rx <Rx> --Ry <Ry> --Rz <Rz> --saveDisk <[bool]saveOnDisk>     --idGPU <selectGPU>")
+        print("................................................................................................................")
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == "-h":
+            helptext()
+            sys.exit()
+        elif opt in ("-i", "--ifile"):
+            sim_path = arg
+        elif opt in ("-o", "--ofile"):
+            out_dir = arg
+        elif opt in ("-t", "--acqTime"):
+            acquisition_time_min = int32(arg)
+        elif opt in ("-c", "--cps"):
+            counts_per_sec = float32(arg)
+        elif opt in ("scaleScattert"):
+            scaleScatter = int32(arg)
+        elif opt in ("-s", "--subset"):
+            subs_num = int32(arg)
+        elif opt in ("-r", "--iter"):
+            iter_num = int32(arg)
+        elif opt in ("--Nx"):
+            Nx = int32(arg)
+        elif opt in ("--Ny"):
+            Ny = int32(arg)
+        elif opt in ("--Nz"):
+            Nz = int32(arg)
+        elif opt in ("--Rx"):
+            Rx = float32(arg)
+        elif opt in ("--Ry"):
+            Ry = float32(arg)
+        elif opt in ("--Rz"):
+            Rz = float32(arg)
+        # elif opt in ("--saveAll"):
+        #	SaveAll = str2bool(arg)
+        elif opt in ("--addPoisson"):
+            addPoisson = str2bool(arg)
+        elif opt in ("--addAttenuation"):
+            addAttenuation = str2bool(arg)
+        elif opt in ("--addScatter"):
+            addScatter = str2bool(arg)
+        elif opt in ("--addRandom"):
+            addRandom = str2bool(arg)
+        elif opt in ("--addSensitivity"):
+            addSensitivity = str2bool(arg)
+        elif opt in ("--saveDisk"):
+            SaveDisk = str2bool(arg)
+        elif opt in ("--idGPU"):
+            idGPU = int32(arg)
+
+    print("\n\n\n========================================================")
+    print("Input: " + sim_path)
+    print("Output: " + out_dir)
+    print("Working on GPU #" + str(idGPU))
+    # print("Save All Iteration on Workspace? " + str(SaveAll) + " " + str(type(SaveAll)))
+    print("Save All Iteration on Disk? " + str(SaveDisk) + " " + str(type(SaveDisk)))
+    print("\n--------------------- SIMULATION -----------------------")
+    print("Length of acquisition: " + str(acquisition_time_min) + " [min]")
+    print("Counts rate: " + str(counts_per_sec) + " [counts per sec]")
+    print("Simulating scanner's sensitivity: " + str(addSensitivity) + " " + str(type(addSensitivity)))
+    print("Simulating attenuation: " + str(addAttenuation) + " " + str(type(addAttenuation)))
+    print("Simulating random counts: " + str(addRandom) + " " + str(type(addRandom)))
+    print("Simulating scattering events: " + str(addScatter) + " " + str(type(addScatter)))
+    print("Scaling factor for scatter artifact: " + str(scaleScatter))
+    print("\n------------------- RECONSTRUCTION ---------------------")
+    print("#Subsets: " + str(subs_num))
+    print("#TotIterations (#iter * #subs) : " + str(iter_num * subs_num))
+    print("Shape of reconstructed activity: " + str((Nx, Ny, Nz)))
+    print("Pixel size (mm): " + str((Rx, Ry, Rz)))
+    print("Size of FOV (mm): " + str((Nx * Rx, Ny * Ry, Nz * Rz)))
+    print("======================================================== \n\n\n ")
+
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    # Set scanner geometry and characteristics
+    pet = PET_Static_Scan()
+    pet.set_scanner(Biograph_mMR)
+    pet.use_compression(False)
+
+    print("========================================================")
+    print("SCANNER DETAILS:")
+    print(pet.binning)
+    print("Default FOV size (mm): " + str(pet.activity_size))
+    print("Default Image Shape (px): " + str(pet.activity_shape))
+    print("Default Resolution (mm/px): " + str(np.asarray(pet.activity_size) / np.asarray(pet.activity_shape)))
+    print("======================================================== \n\n")
+
+    # Set GPU
+    print("CHOOSE GPU:")
+    print(occiput.Core.NiftyPy_wrap.gpu_list())
+    occiput.Core.NiftyPy_wrap.gpu_set(gpu_id=idGPU)
+
+    # Load activity phantom and attenuation phantom
+    # Change the files here to change groundtruth activity and attenuation.
+    # Or change the variable simulation_path; in this case the new path must contains the required nifti files with the activity and attenuation phantoms.
+    print("\n\nLoading true activity phantom ... ")
+    true_activity = import_nifti('%s/true_activity.nii' % sim_path)
+    print("---> shape: " + str(true_activity.shape))
+    print("Done!")
+
+    # Compute noiseless prompts in the ideal case (no scatter, no randoms)
+    # Set the discretization grid for the activity:
+    print("Read original resolution from phantom's Nifti header ...")
+    temp = nib.load('%s/true_activity.nii' % sim_path)
+    phantom_res = temp.header['pixdim'][1:4]
+    print("Done!")
+    print("Project true activity ... ")
+    pet.set_activity_shape(true_activity.shape)
+    pet.set_activity_size([phantom_res[0] * pet.activity_shape[0], phantom_res[0]
+                           * pet.activity_shape[1], phantom_res[0] * pet.activity_shape[2]])
+    ideal_prompts = pet.project_activity(true_activity)
+    print("Done!")
+
+    # Set the discretization grid for the attenuation:
+    if addAttenuation:
+        print("\nLoading attenuation map (it should have the same shape of the activity phantom) ... ")
+        attenuation = import_nifti('%s/attenuation.nii' % sim_path)
+        print("---> shape: " + str(attenuation.shape))
+        print("Done!")
+        print("Read original resolution from attenuation image's Nifti header ...")
+        temp = nib.load('%s/attenuation.nii' % sim_path)
+        phantom_res = temp.header['pixdim'][1:4]
+        print("Done!")
+        print("Project attenuation ... ")
+        pet.set_attenuation_shape(attenuation.shape)
+        pet.set_attenuation_size([phantom_res[0] * pet.attenuation_shape[0], phantom_res[0] *
+                                  pet.attenuation_shape[1],
+                                  phantom_res[0] * pet.attenuation_shape[2]])  # mMR spatial resolution
+        attenuation_projection = pet.project_attenuation(attenuation)
+        print("Done!")
+    else:
+        attenuation_projection = ideal_prompts.copy()
+        attenuation_projection.data = 0.0 * attenuation_projection.data + 1
+
+    # Import sensitivity maps
+    if addSensitivity:
+        print("\nLoading sensitivity (it should have the same shape of the scanner geometry) ... ")
+        # it should have the same shape of the scanner geometry
+        pet.import_sensitivity('%s/norm3d_00.h33' % sim_path)
+        sensitivity = pet.sensitivity
+        print("---> shape: " + str(pet.sensitivity.data.shape))
+        print("Done!")
+    else:  # TODO
+        # sensitivity = ideal_prompts.copy()
+        # sensitivity.data = 0.0 * sensitivity.data + 1
+        # load a default sensitivity
+        pet.import_sensitivity(
+            '/space/mercury/2/users/occiput/Douglas/simulation/01/norm3d_00.h33')
+        sensitivity = pet.sensitivity
+
+    # TODO: CHECK DURATION OF SCATTER AND RANDOMS SO THAT THEY ARE CORRECTLY SCALED WITH SIMULATED ACTIVITY
+    # Load expected randoms and scatter (check for future import file type)
+    if addRandom:
+        print("\nLoading expected randoms ... ")
+        randoms = import_PET_Projection('%s/randoms.h5' % sim_path)
+        print("---> shape: " + str(randoms.data.shape))
+        print("Done!")
+    else:
+        randoms = ideal_prompts.copy()
+        randoms.data = 0.0 * randoms.data
+
+    if addScatter:
+        print("\nLoading scatter simulation ... ")
+        scatter = import_PET_Projection('%s/scatter.h5' % sim_path)
+        print("---> shape: " + str(scatter.data.shape))
+        print("Done!")
+    else:
+        scatter = ideal_prompts.copy()
+        scatter.data = 0.0 * scatter.data
+
+    # Simulate PET acquisition
+    # 2- Set scan duration and apply Poisson noise
+    # NOTE: the randoms and scatter stored in the .h5 files above have been generated with an old version of occiput. The
+    # line below make them compatible.
+    randoms.sparsity = ideal_prompts.sparsity
+    scatter.sparsity = ideal_prompts.sparsity
+    print("\nAdding noise to ideal prompts, and scaling according to acquisition time and counts rate ...")
+    scale = acquisition_time_min * 60 * counts_per_sec / ideal_prompts.data.sum()
+    randoms.data = randoms.data * scale
+    scatter.data = scaleScatter * scatter.data * scale
+
+    prompts = copy.deepcopy(ideal_prompts)
+    prompts.data = ideal_prompts.data * scale * attenuation_projection.data * \
+                   sensitivity.data + randoms.data + scatter.data * sensitivity.data
+    noisy_prompts = copy.deepcopy(prompts)
+    if addPoisson:
+        noisy_prompts.data = float32(np.random.poisson(prompts.data))
+    print("Done!")
+
+    # ITERATIVE RECONSTRUCTION ============================================================================================
+    print("\nSetup reconstruction options ...")
+    pet.set_prompts(noisy_prompts)
+    pet.prompts.save_to_file('%s/noisy_prompts.nii' % out_dir)
+    if addSensitivity:
+        pet.set_sensitivity(sensitivity)
+    if addRandom:
+        pet.set_randoms(randoms)
+    if addScatter:
+        pet.set_scatter(scatter)
+    pet.scale_activity = 1.0
+
+    # Set parameters for OSEM reconstruction:
+    # Standard 3 iterations of fully 3D OSEM with 21 subsets
+    subset_size = pet.binning.N_axial / subs_num
+    iterations = (pet.binning.N_axial / subset_size) * iter_num
+    subset_mode = "ordered_axial"
+
+    # Occiput allows you to optionally set freely the position of the reconstruction volume; set flag to True to experiment
+    experiment_with_transforms = False
+    from ..occiput.Reconstruction.PET.PET import RigidTransform
+    if experiment_with_transforms:
+        r = RigidTransform([0, 0, 0, 0, 0, pi / 4])
+    else:
+        r = RigidTransform([0, 0, 0, 0, 0, 0])
+
+    pet.set_activity_shape([Nx, Ny, Nz])
+    pet.set_activity_size([pet.activity_shape[0] * Rx,
+                           pet.activity_shape[1] * Ry, pet.activity_shape[2] * Rz])
+    print("Done!\n\n")
+
+    print("RECONSTRUCTION DETAILS:")
+    print("Size (mm): " + str(pet.activity_size))
+    print("Shape (px): " + str(pet.activity_shape))
+    print("Resolution (mm/px): " + str(np.asarray(pet.activity_size) / np.asarray(pet.activity_shape)) + "\n\n")
+
+    print("OSEM RECONSTRUCTION:")
+    activity_recon = osem_reconstruction(pet, iterations=iterations, subset_mode=subset_mode,
+                                         attenuation_projection=attenuation_projection,
+                                         subset_size=subset_size, transformation=r, SaveAll=SaveAll,
+                                         SaveDisk=SaveDisk, savepath=out_dir)
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

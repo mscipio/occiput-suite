@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <!resources>
+    <meta charset='utf-8'>
+    <title>DisplayNode Image</title>
+    <!style>
+    
+</head>
+
+<body>
+    <div id="page_contentDiv" class="openseadragon"></div>
+
+<script type="text/javascript">
+viewer = OpenSeadragon({
+     id:              "page_contentDiv", 
+     prefixUrl:       "./static/openseadragon/images/", 
+     showReferenceStrip: false, 
+     timeout:         30000, 
+     immediateRender: false, 
+     alwaysBlend:     false, 
+     tileSources:     [{"levels": [<!data>], "type": "legacy-image-pyramid"}, ],     
+     });
+</script>
+
+</body>
+</html>

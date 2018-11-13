@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <!resources>
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8">
+    <title>DisplayNode graph</title>
+    <style type="text/css">
+
+path.link {
+  fill: none;
+  stroke: #666;
+  stroke-width: 1.5px;
+}
+
+marker#t0 {
+  fill: green;
+}
+
+path.link.t0 {
+  stroke: green;
+}
+
+path.link.t2 {
+  stroke-dasharray: 0,2 1;
+}
+
+circle {
+  fill: #ccc;
+  stroke: #333;
+  stroke-width: 1.5px;
+}
+
+text {
+  font: 10px sans-serif;
+  pointer-events: none;
+}
+
+text.shadow {
+  stroke: #fff;
+  stroke-width: 3px;
+  stroke-opacity: .8;
+}
+
+</style>
+</head>
+<body>
+<!data>
+
+<script type="text/javascript">
+
+//nodes and links are imported from the json file
+var nodes = graph['nodes']; 
+var links = graph['links']; 
+
+var nodes2 = {};
+var links2 = []; 
+
+for (var i=0; i<nodes.length; i++) {
+    node = nodes[i]; 
+    nodes2[node['name']] = node; 
+};
+
+for (var i=0; i<links.length; i++) {
+    links2[i] = {'source':nodes2[links[i]['source']], 'target':nodes2[links[i]['target']], 'type':links[i]['type'],}; 
+};
+
+
+
+var w = 800,
+    h = 400;
+
+var force = d3.layout.force()
+    .nodes(d3.values(nodes2))
+    .links(links2)
+    .size([w, h])
+    .linkDistance(60)
+    .charge(-300)
+    .on("tick", tick)
+    .start();
+
+var svg = d3.select("body").append("svg:svg")
+    .attr("width", w)
+    .attr("height", h);
+
+// Per-type markers, as they don't inherit styles.
+svg.append("svg:defs").selectAll("marker")
+    .data(["t0", "t1", "t2"])
+  .enter().append("svg:marker")
+    .attr("id", String)
+    .attr("viewBox", "0 -5 10 10")
+    .attr("refX", 20)
+    .attr("refY", -1.5)
+    .attr("markerWidth", 6)
+    .attr("markerHeight", 6)
+    .attr("orient", "auto")
+  .append("svg:path")
+    .attr("d", "M0,-5L10,0L0,5");
+
+var path = svg.append("svg:g").selectAll("path")
+    .data(force.links())
+  .enter().append("svg:path")
+    .attr("class", function(d) { return "link " + d.type; })
+    .attr("marker-end", function(d) { return "url(#" + d.type + ")"; });
+
+colors  = ['#fff','#ccc','#ee4','#dddddd','#eeeeee','#ffffc0']; 
+strokes = ['#333','#333','#333','#dddddd','#dddddd','#dddddd']; 
+
+var circle = svg.append("svg:g").selectAll("circle")
+    .data(force.nodes())
+  .enter().append("svg:circle")
+    .attr("r", 10)
+    .call(force.drag)
+    .style('fill', function(d){return colors[d.type];})
+    .style('stroke', function(d){return strokes[d.type];});
+
+var text = svg.append("svg:g").selectAll("g")
+    .data(force.nodes())
+  .enter().append("svg:g");
+
+// A copy of the text with a thick white stroke for legibility.
+text.append("svg:text")
+    .attr("x", 12)
+    .attr("y", ".31em")
+    .attr("class", "shadow")
+    .text(function(d) { return d.name; });
+
+text.append("svg:text")
+    .attr("x", 12)
+    .attr("y", ".31em")
+    .text(function(d) { return d.name; });
+
+// Use elliptical arc path segments to doubly-encode directionality.
+function tick() {
+  path.attr("d", function(d) {
+    var dx = d.target.x - d.source.x,
+        dy = d.target.y - d.source.y,
+        dr = Math.sqrt(dx * dx + dy * dy);
+    return "M" + d.source.x + "," + d.source.y + "A" + dr + "," + dr + " 0 0,1 " + d.target.x + "," + d.target.y;
+  });
+
+  circle.attr("transform", function(d) {
+    return "translate(" + d.x + "," + d.y + ")";
+  });
+
+  text.attr("transform", function(d) {
+    return "translate(" + d.x + "," + d.y + ")";
+  });
+}
+
+    </script>
+  </body>
+</html>

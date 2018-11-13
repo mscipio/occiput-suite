@@ -1,0 +1,13 @@
+numpy >= 1.6.0
+matplotlib >= 1.4.0
+simplewrap >= 0.2.0
+petlink >= 0.2.0
+interfile >= 0.2.0
+DisplayNode >= 0.2.0
+ilang >= 0.2.0
+ipy_table >= 1.11.0
+nibabel >= 2.0.0
+pydicom >= 0.9.0
+nipy >= 0.3.0
+ipython >= 2.0.0
+h5py >= 2.3.0

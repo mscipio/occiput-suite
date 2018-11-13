@@ -1,0 +1,37 @@
+#! /usr/pubsw/packages/occiput/dependencies/python/bin/occiput/bin/python2.7
+
+from __future__ import print_function
+
+def main():
+    from optparse import OptionParser
+    import sys
+
+    usage = "Occiput command line tool: convert a dicom listmode file to interfile. "
+    if len(sys.argv) < 2:
+        print(usage)
+        print("Use option --help for instructions. ")
+
+    parser = OptionParser(usage=usage)
+    parser.add_option("-i", "--input", dest="input",
+                      help="Name of the input dicom file. ", metavar="FILE")
+    parser.add_option("-o", "--output", dest="output",
+                      help="Output file name, do not specify the extension here. Two files will be generated: a 'xxx.l' data file and a 'xxx.l.hdr' header file.",
+                      metavar="FILE")
+    (options, args) = parser.parse_args()
+
+    all_parameters = True
+    if options.input is None:
+        print("Parameter -i (--input) is required: input dicom listmode file.  ")
+        all_parameters = False
+    if options.output is None:
+        print("Parameter -o (--output) is required: output file name. ")
+        all_parameters = False
+    if not all_parameters:
+        return
+
+    from .. import occiput
+    occiput.DataSources.FileSources.PET_listmode.convert_listmode_dicom_to_interfile(options.input, options.output)
+
+
+if __name__ == "__main__":
+    main()

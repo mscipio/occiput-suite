@@ -1,0 +1,90 @@
+#! /usr/pubsw/packages/occiput/dependencies/python/bin/occiput/bin/python2.7
+
+from __future__ import print_function
+
+def listmode_to_sinogram_mMR(listmode_hdr, listmode_data, sinogram_file, time_range_ms=(0, None),
+                             sinogram_format='matlab', verbose=False):
+    from .. import occiput
+    pet = occiput.Reconstruction.PET.PET_Static_Scan()
+    pet.import_listmode(listmode_hdr, datafile=listmode_data, time_range_ms=time_range_ms,
+                           display_progress=verbose)
+
+    prompts = pet.prompts.to_nd_array()
+    randoms = pet.randoms.to_nd_array()
+
+    if sinogram_format == 'matlab':
+        # Export as Matlab mat 
+        print("Exporting sinogram as .mat file (Matlab): %s" % sinogram_file)
+        import scipy.io
+        scipy.io.savemat(sinogram_file, {'prompts': prompts, 'randoms': randoms})
+    elif sinogram_format == 'h5':
+        filename_prompts = ''.join(
+            sinogram_file.split('.')[0:-1] + ['_prompts', ] + ['.', sinogram_file.split('.')[-1]])
+        filename_randoms = ''.join(
+            sinogram_file.split('.')[0:-1] + ['_randoms', ] + ['.', sinogram_file.split('.')[-1]])
+        print("Exporting sinogram as h5 file: %s, %s" % (filename_prompts, filename_randoms))
+        pet.prompts.save_to_file(filename_prompts)
+        pet.randoms.save_to_file(filename_randoms)
+    elif sinogram_format == 'raw':
+        filename_prompts = ''.join(
+            sinogram_file.split('.')[0:-1] + ['_prompts', ] + ['.', sinogram_file.split('.')[-1]])
+        filename_randoms = ''.join(
+            sinogram_file.split('.')[0:-1] + ['_randoms', ] + ['.', sinogram_file.split('.')[-1]])
+        print("Exporting sinogram as raw binary file: %s, %s" % (filename_prompts, filename_randoms))
+        prompts.tofile(filename_prompts)
+        randoms.tofile(filename_randoms)
+    else:
+        print("Format %s for sinogram is not supported. " % sinogram_format)
+
+
+def main():
+    from optparse import OptionParser
+    import sys
+
+    usage = "Occiput command line tool: create a sinogram from a PET listmode file. "
+    if len(sys.argv) < 2:
+        print(usage)
+        print("Use option --help for instructions. ")
+
+    parser = OptionParser(usage=usage)
+    #    parser.add_option("-b", "--binning", dest="binning", default=False, 
+    #                  help="Bin list-mode input data to sinogram. ")
+    parser.add_option("-v", action="store_true", dest="verbose",
+                      help="Flag to enable printing verbose information to stdout. ")
+    parser.add_option("-i", "--input", dest="input",
+                      help="Name of the input listmode header file. ", metavar="FILE")
+    parser.add_option("-o", "--output", dest="output",
+                      help="Output file name.", metavar="FILE")
+    parser.add_option("-d", "--datafile", dest="datafile",
+                      help="Name of the input listmode data file [optional].", metavar="FILE")
+    parser.add_option("-t", "--type", dest="type", default="matlab",
+                      help="Sinogram file type. Supported types are 'matlab', 'h5' and 'raw', default matlab. ")
+    parser.add_option("-s", "--start", dest="start", default="0",
+                      help="Start time listmode binning, in unit of [ms]. ")
+    parser.add_option("-e", "--end", dest="end", default="none",
+                      help="End time listmode binning, in unit of [ms]. Set it to 0 to convert the entire sinogram. ")
+    (options, args) = parser.parse_args()
+
+    all_parameters = True
+    if options.input is None:
+        print("Parameter -i (--input) is required: input listmode file.  ")
+        all_parameters = False
+    if options.output is None:
+        print("Parameter -o (--output) is required: output sinogram file. ")
+        all_parameters = False
+    if not all_parameters:
+        return
+
+    if options.end == 'none' or options.end == 'None' or options.end == '0':
+        options.end = None
+    else:
+        options.end = int(options.end)
+    time_range_ms = [int(options.start), options.end]
+
+    #    if options.binning: 
+    listmode_to_sinogram_mMR(listmode_hdr=options.input, listmode_data=options.datafile, sinogram_file=options.output,
+                             time_range_ms=time_range_ms, sinogram_format=options.type, verbose=options.verbose)
+
+
+if __name__ == "__main__":
+    main()
